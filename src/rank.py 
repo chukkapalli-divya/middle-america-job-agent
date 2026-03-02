@@ -1,0 +1,91 @@
+"""
+Tailoring Module - Customizes resume and cover letter for each job
+"""
+from openai import OpenAI
+from src.schemas import Job
+from src.config import OPENAI_API_KEY
+from src.utils import get_logger, load_text, save_text
+import os
+
+logger = get_logger("tailor")
+
+# Initialize OpenAI client
+client = None
+if OPENAI_API_KEY:
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
+def tailor_top_jobs(top_jobs: list[Job], output_dir: str = "outputs/top3"):
+    """
+    Create tailored resume and cover letter for top 3 jobs
+    """
+    # Load base documents
+    try:
+        base_resume = load_text("data/base_resume.md")
+        base_cover = load_text("data/base_cover_letter.md")
+    except FileNotFoundError as e:
+        logger.error(f"Missing base documents: {e}")
+        print("❌ ERROR: Create data/base_resume.md and data/base_cover_letter.md first!")
+        return
+    
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Tailor for each of top 3 jobs
+    for i, job in enumerate(top_jobs[:3], 1):
+        logger.info(f"Tailoring for Job {i}: {job.title} at {job.company}")
+        print(f"   ✍️  Tailoring for: {job.title} at {job.company}...")
+        
+        # Tailor Resume
+        tailored_resume = tailor_document(base_resume, job, "resume")
+        save_text(f"{output_dir}/job{i}_resume.md", tailored_resume)
+        
+        # Tailor Cover Letter
+        tailored_cover = tailor_document(base_cover, job, "cover letter")
+        save_text(f"{output_dir}/job{i}_cover_letter.md", tailored_cover)
+        
+        logger.info(f"Saved: job{i}_resume.md and job{i}_cover_letter.md")
+
+
+def tailor_document(base_content: str, job: Job, doc_type: str) -> str:
+    """
+    Use GPT to tailor a document for a specific job
+    """
+    if not client:
+        logger.error("OpenAI client not initialized - check OPENAI_API_KEY")
+        return base_content + f"\n\n[Tailoring skipped - no API key]"
+    
+    prompt = f"""You are an expert resume writer. Tailor this {doc_type} for the job below.
+
+===== JOB DETAILS =====
+Title: {job.title}
+Company: {job.company}
+Location: {job.location}
+Required Skills: {', '.join(job.skills) if job.skills else 'Not specified'}
+Job Description:
+{job.description[:1500] if job.description else 'Not provided'}
+
+===== BASE {doc_type.upper()} =====
+{base_content}
+
+===== INSTRUCTIONS =====
+1. Reorder skills to put matching skills first
+2. Modify 2-3 bullet points to include keywords from the job
+3. Update the summary to mention the company name and role
+4. Keep the same overall structure and length
+5. Don't fabricate experience - only reorganize and rephrase
+
+Return ONLY the tailored {doc_type}. No explanations or markdown code blocks."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",  # Cheaper and fast
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=2000
+        )
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        logger.error(f"OpenAI API error: {e}")
+        return base_content + f"\n\n[Tailoring failed: {e}]"
